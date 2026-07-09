@@ -17,7 +17,8 @@ jobs:
     - name: 🟢 配置 Node.js 环境
       uses: actions/setup-node@v4
       with:
-        node-version: '20' # 跟你本地版本差不多就行
+        # 🌟 核心修复：将版本升级到 22，满足最新 Capacitor 的胃口
+        node-version: '22' 
 
     - name: ☕ 配置 Java JDK 环境
       uses: actions/setup-java@v4
