@@ -24,7 +24,10 @@ jobs:
       uses: actions/setup-java@v4
       with:
         distribution: 'zulu'
-        java-version: '17' # 编译 Android 必备
+        java-version: '17'
+        # 🌟 关键补丁：明确告诉 Gradle 使用这个版本的 Java 编译器
+        java-package: jdk
+        architecture: x64
 
     - name: 📦 安装前端依赖并打包
       run: |
