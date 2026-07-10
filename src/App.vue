@@ -169,7 +169,7 @@ const connectToServer = () => {
   
   // 🌟 改回 HTTP，完美适配原生 APK 运行环境
   const targetUrl = `http://${serverIp.value.replace('http://', '').replace('https://', '')}:3000`;
-  socket = io(targetUrl, { timeout: 3000, reconnectionAttempts: Infinity });
+  socket = io(targetUrl, { timeout: 3000, reconnectionAttempts: Infinity, transports: ['websocket'] });
 
   socket.on('connect', () => {
     isConnected.value = true; isConnecting.value = false; connectError.value = '';
