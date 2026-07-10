@@ -15,10 +15,6 @@
             {{ isConnecting ? '建立链路中...' : '接入终端' }}
           </button>
           <p class="error-msg" v-show="connectError">{{ connectError }}</p>
-
-          <button class="btn-diagnostic-overlay" @click="runNetworkDiagnostic">
-            🚨 连不上？点击进行网络底层诊断
-          </button>
         </div>
       </div>
     </transition>
@@ -166,86 +162,34 @@ const saveSensitivity = () => {
   vibrate(10);
 };
 
-// ====================================================
-// 📡 全息网络底层无死角诊断探针
-// ====================================================
-const runNetworkDiagnostic = async () => {
-  vibrate(20);
-  let report = "=== 📡 全息网络底层诊断 ===\n\n";
-  let cleanIp = serverIp.value.replace('http://', '').replace('https://', '').replace('ws://', '').trim();
-  
-  if (!cleanIp) {
-    alert("请先在连接框里填入小主机的 IP 地址再点诊断！");
-    return;
-  }
-
-  // 探针 1：测试外网（公网）连通性
-  report += "【探针 1】尝试连接公网 (百度)...\n";
-  try {
-    const controller = new AbortController();
-    const id = setTimeout(() => controller.abort(), 3000); 
-    await fetch('https://www.baidu.com', { mode: 'no-cors', signal: controller.signal });
-    clearTimeout(id);
-    report += "✅ 公网畅通！(APP 未被手机系统断网)\n\n";
-  } catch (e) {
-    report += `❌ 公网阻断！原因: ${e.name === 'AbortError' ? '连接超时' : e.message}\n\n`;
-  }
-
-  // 探针 2：测试局域网（小主机 HTTP 端口）连通性
-  report += `【探针 2】尝试连接局域网 (${cleanIp}:3000)...\n`;
-  try {
-    const controller2 = new AbortController();
-    const id2 = setTimeout(() => controller2.abort(), 3000);
-    await fetch(`http://${cleanIp}:3000`, { mode: 'no-cors', signal: controller2.signal });
-    clearTimeout(id2);
-    report += "✅ 局域网畅通！(物理网线与 Windows 防火墙全通)\n";
-  } catch (e) {
-    report += `❌ 局域网阻断！原因: ${e.name === 'AbortError' ? '连接超时' : e.message}\n`;
-  }
-
-  alert(report);
-};
-// ====================================================
-
 const connectToServer = () => {
   if (!serverIp.value) return;
   isConnecting.value = true; connectError.value = '';
   if (socket) socket.disconnect();
   
+  // 保持修好的纯净 ws:// 协议和去除隐形空格
   let cleanIp = serverIp.value.replace('http://', '').replace('https://', '').trim();
   const targetUrl = `ws://${cleanIp}:3000`;
   
-  console.log("【排查】🎯 纯净 WebSocket 通道:", targetUrl);
-
   socket = io(targetUrl, { 
     timeout: 3500, 
     reconnectionAttempts: Infinity,
     transports: ['websocket']
   });
 
-  socket.io.engine.on("initial_headers", (headers) => {
-    console.log("【排查】📦 底层尝试发起握手:", JSON.stringify(headers));
-  });
-
-  socket.io.engine.on("upgradeError", (err) => {
-    console.error("【排查】❌ 协议升级层断开:", err.message || err);
-  });
-
   socket.on('connect_error', (err) => {
-    console.error("【排查】🚨 链路受阻报错对象:", err);
     isConnecting.value = false; 
     isConnected.value = false;
-    connectError.value = `链路受阻: ${err.message}`;
+    connectError.value = `链路受阻，请检查网络或服务端`;
   });
 
   socket.on('connect', () => {
-    console.log("【排查】🚀 神经链路建立成功！");
     isConnected.value = true; isConnecting.value = false; connectError.value = '';
     localStorage.setItem('remoteServerIp', cleanIp);
     vibrate(30);
   });
   
-  socket.on('disconnect', (reason) => {
+  socket.on('disconnect', () => {
     isConnected.value = false;
   });
 };
@@ -308,6 +252,7 @@ const processInput = (currentText) => {
   }
 };
 
+// 触控板逻辑
 const startX = ref(0), startY = ref(0);
 let touchStartTime = 0, isSwipe = false;
 
@@ -336,16 +281,28 @@ const onTouchEnd = () => {
   }
 };
 
-// 空鼠控制逻辑
+// ==========================================
+// 🚀 电竞级空鼠控制逻辑 (rAF 帧同步渲染发包)
+// ==========================================
 const gyroEnabled = ref(false);
 let lastBeta = null;
 let lastAlpha = null;
 let gyroInitialized = false;
-let lastGyroSend = 0;
 
 let smoothedVelocityX = 0;
 let smoothedVelocityY = 0;
 const LPF_ALPHA = 0.45; 
+let animationFrameId = null;
+
+// 独立于传感器的渲染帧同步发送循环
+const sendGyroDataLoop = () => {
+  if (gyroEnabled.value && socket && isConnected.value) {
+    if (Math.abs(smoothedVelocityX) > 0 || Math.abs(smoothedVelocityY) > 0) {
+      socket.emit('mousemove', { x: smoothedVelocityX, y: smoothedVelocityY });
+    }
+  }
+  animationFrameId = requestAnimationFrame(sendGyroDataLoop);
+};
 
 const toggleGyro = async () => {
   if (!gyroEnabled.value) {
@@ -353,9 +310,15 @@ const toggleGyro = async () => {
     gyroInitialized = false; 
     smoothedVelocityX = 0;
     smoothedVelocityY = 0;
+    
+    // 启动帧同步发送
+    if (animationFrameId) cancelAnimationFrame(animationFrameId);
+    animationFrameId = requestAnimationFrame(sendGyroDataLoop);
+    
     vibrate([15, 30, 15]);
   } else {
     gyroEnabled.value = false;
+    if (animationFrameId) cancelAnimationFrame(animationFrameId);
     vibrate([15, 30, 15]);
   }
 };
@@ -363,15 +326,9 @@ const toggleGyro = async () => {
 const handleOrientation = (event) => {
   if (event.beta === null || event.alpha === null) return;
 
-  const now = Date.now();
-  if (now - lastGyroSend < 16) return; 
-  lastGyroSend = now;
-
   if (!gyroInitialized || lastBeta === null || lastAlpha === null) {
-    lastBeta = event.beta;
-    lastAlpha = event.alpha;
-    gyroInitialized = true;
-    return;
+    lastBeta = event.beta; lastAlpha = event.alpha;
+    gyroInitialized = true; return;
   }
 
   let deltaBeta = event.beta - lastBeta;
@@ -381,20 +338,17 @@ const handleOrientation = (event) => {
   else if (deltaAlpha < -180) deltaAlpha += 360;
 
   if (Math.abs(deltaBeta) > 30 || Math.abs(deltaAlpha) > 30) {
-    lastBeta = event.beta;
-    lastAlpha = event.alpha;
-    return; 
+    lastBeta = event.beta; lastAlpha = event.alpha; return; 
   }
 
-  lastBeta = event.beta;
-  lastAlpha = event.alpha;
+  lastBeta = event.beta; lastAlpha = event.alpha;
 
   let rawVelocityX = 0;
   let rawVelocityY = 0;
   
   const gyroBaseSens = 18 * (sensitivity.value / 5.0); 
   
-  if (Math.abs(deltaBeta) > 0.08 || Math.abs(deltaAlpha) > 0.08) {
+  if (Math.abs(deltaBeta) > 0.05 || Math.abs(deltaAlpha) > 0.05) {
     rawVelocityX = -deltaAlpha * gyroBaseSens;
     rawVelocityY = -deltaBeta * gyroBaseSens;
   }
@@ -402,14 +356,8 @@ const handleOrientation = (event) => {
   smoothedVelocityX = (smoothedVelocityX * (1 - LPF_ALPHA)) + (rawVelocityX * LPF_ALPHA);
   smoothedVelocityY = (smoothedVelocityY * (1 - LPF_ALPHA)) + (rawVelocityY * LPF_ALPHA);
 
-  if (Math.abs(smoothedVelocityX) < 0.25) smoothedVelocityX = 0;
-  if (Math.abs(smoothedVelocityY) < 0.25) smoothedVelocityY = 0;
-
-  if (smoothedVelocityX !== 0 || smoothedVelocityY !== 0) {
-    if (socket && isConnected.value) {
-      socket.emit('mousemove', { x: smoothedVelocityX, y: smoothedVelocityY });
-    }
-  }
+  if (Math.abs(smoothedVelocityX) < 0.15) smoothedVelocityX = 0;
+  if (Math.abs(smoothedVelocityY) < 0.15) smoothedVelocityY = 0;
 };
 
 watch(gyroEnabled, (val) => {
@@ -422,6 +370,7 @@ watch(gyroEnabled, (val) => {
 
 onUnmounted(() => {
   window.removeEventListener('deviceorientation', handleOrientation);
+  if (animationFrameId) cancelAnimationFrame(animationFrameId);
   if (pingTimer) clearInterval(pingTimer);
   if (socket) socket.disconnect();
 });
@@ -446,7 +395,6 @@ onUnmounted(() => {
 .tool-btn { font-size: 13px; padding: 5px 10px; border-radius: 20px; background: rgba(255,255,255,0.08); color: #cbd5e1; transition: all 0.2s; cursor: pointer; }
 .tool-btn:active { transform: scale(0.9); }
 .tool-btn.active { background: #0ea5e9; color: #fff; box-shadow: 0 0 16px rgba(14,165,233,0.4); border: 1px solid rgba(14,165,233,0.8); }
-
 .status-dot { width: 8px; height: 8px; border-radius: 50%; }
 .status-dot.online { background-color: #10b981; box-shadow: 0 0 10px #10b981; }
 .status-dot.offline { background-color: #ef4444; }
@@ -522,12 +470,4 @@ onUnmounted(() => {
 .btn-primary:active { background: #0284c7; transform: scale(0.98); }
 .btn-primary:disabled { background: rgba(255,255,255,0.1); color: #64748b; }
 .error-msg { color: #ef4444; font-size: 13px; margin-top: 15px; margin-bottom: 0; }
-
-/* 🌟 新增：遮罩层高亮诊断按钮样式 */
-.btn-diagnostic-overlay {
-  background: rgba(244, 63, 94, 0.1); border: 1px solid rgba(244, 63, 94, 0.3);
-  color: #f43f5e; padding: 10px; border-radius: 12px; width: 100%;
-  margin-top: 20px; font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.2s;
-}
-.btn-diagnostic-overlay:active { background: rgba(244, 63, 94, 0.2); transform: scale(0.98); }
 </style>
