@@ -15,6 +15,10 @@
             {{ isConnecting ? '建立链路中...' : '接入终端' }}
           </button>
           <p class="error-msg" v-show="connectError">{{ connectError }}</p>
+
+          <button class="btn-diagnostic-overlay" @click="runNetworkDiagnostic">
+            🚨 连不上？点击进行网络底层诊断
+          </button>
         </div>
       </div>
     </transition>
@@ -24,7 +28,6 @@
         控制中枢 <span class="disconnect-text">断开</span>
       </div>
       <div class="tool-group">
-        <div class="tool-btn diagnostic-btn" @click="runNetworkDiagnostic">诊断</div>
         <div class="tool-btn" @click="openKeyboard">输入</div>
         <div :class="['tool-btn', { active: gyroEnabled }]" @click="toggleGyro">空鼠</div>
         <div :class="['status-dot', isConnected ? 'online' : 'offline']"></div>
@@ -164,7 +167,7 @@ const saveSensitivity = () => {
 };
 
 // ====================================================
-// 🌟 新增：全息网络底层无死角诊断探针
+// 📡 全息网络底层无死角诊断探针
 // ====================================================
 const runNetworkDiagnostic = async () => {
   vibrate(20);
@@ -172,7 +175,7 @@ const runNetworkDiagnostic = async () => {
   let cleanIp = serverIp.value.replace('http://', '').replace('https://', '').replace('ws://', '').trim();
   
   if (!cleanIp) {
-    alert("请先在输入框填入小主机的 IP 地址！");
+    alert("请先在连接框里填入小主机的 IP 地址再点诊断！");
     return;
   }
 
@@ -180,13 +183,12 @@ const runNetworkDiagnostic = async () => {
   report += "【探针 1】尝试连接公网 (百度)...\n";
   try {
     const controller = new AbortController();
-    const id = setTimeout(() => controller.abort(), 3000); // 3秒物理超时
-    // mode: 'no-cors' 允许跨域嗅探
+    const id = setTimeout(() => controller.abort(), 3000); 
     await fetch('https://www.baidu.com', { mode: 'no-cors', signal: controller.signal });
     clearTimeout(id);
-    report += "✅ 公网畅通！(APP 未被手机系统全盘断网)\n\n";
+    report += "✅ 公网畅通！(APP 未被手机系统断网)\n\n";
   } catch (e) {
-    report += `❌ 公网彻底阻断！原因: ${e.name === 'AbortError' ? '连接超时' : e.message}\n\n`;
+    report += `❌ 公网阻断！原因: ${e.name === 'AbortError' ? '连接超时' : e.message}\n\n`;
   }
 
   // 探针 2：测试局域网（小主机 HTTP 端口）连通性
@@ -196,9 +198,9 @@ const runNetworkDiagnostic = async () => {
     const id2 = setTimeout(() => controller2.abort(), 3000);
     await fetch(`http://${cleanIp}:3000`, { mode: 'no-cors', signal: controller2.signal });
     clearTimeout(id2);
-    report += "✅ 局域网畅通！(物理链路与 Windows 端口全通)\n";
+    report += "✅ 局域网畅通！(物理网线与 Windows 防火墙全通)\n";
   } catch (e) {
-    report += `❌ 局域网彻底阻断！原因: ${e.name === 'AbortError' ? '连接超时' : e.message}\n`;
+    report += `❌ 局域网阻断！原因: ${e.name === 'AbortError' ? '连接超时' : e.message}\n`;
   }
 
   alert(report);
@@ -210,11 +212,10 @@ const connectToServer = () => {
   isConnecting.value = true; connectError.value = '';
   if (socket) socket.disconnect();
   
-  // 强制精简化、剔除任何输入法产生的隐形空格
   let cleanIp = serverIp.value.replace('http://', '').replace('https://', '').trim();
   const targetUrl = `ws://${cleanIp}:3000`;
   
-  console.log("【排查】🎯 纯净 WebSocket 寻址通道:", targetUrl);
+  console.log("【排查】🎯 纯净 WebSocket 通道:", targetUrl);
 
   socket = io(targetUrl, { 
     timeout: 3500, 
@@ -232,9 +233,6 @@ const connectToServer = () => {
 
   socket.on('connect_error', (err) => {
     console.error("【排查】🚨 链路受阻报错对象:", err);
-    console.error("👉 错误 Message:", err.message);
-    if (err.cause) console.error("👉 错误 Cause:", err.cause.message || err.cause);
-
     isConnecting.value = false; 
     isConnected.value = false;
     connectError.value = `链路受阻: ${err.message}`;
@@ -248,7 +246,6 @@ const connectToServer = () => {
   });
   
   socket.on('disconnect', (reason) => {
-    console.warn(`【排查】🔌 链路断开，代码: ${reason}`);
     isConnected.value = false;
   });
 };
@@ -450,10 +447,6 @@ onUnmounted(() => {
 .tool-btn:active { transform: scale(0.9); }
 .tool-btn.active { background: #0ea5e9; color: #fff; box-shadow: 0 0 16px rgba(14,165,233,0.4); border: 1px solid rgba(14,165,233,0.8); }
 
-/* 🌟 新增：高亮诊断按钮样式 */
-.diagnostic-btn { color: #f43f5e !important; border: 1px solid rgba(244, 63, 94, 0.3) !important; background: rgba(244, 63, 94, 0.05) !important; font-weight: 600; }
-.diagnostic-btn:active { background: rgba(244, 63, 94, 0.3) !important; transform: scale(0.9); }
-
 .status-dot { width: 8px; height: 8px; border-radius: 50%; }
 .status-dot.online { background-color: #10b981; box-shadow: 0 0 10px #10b981; }
 .status-dot.offline { background-color: #ef4444; }
@@ -519,14 +512,22 @@ onUnmounted(() => {
 .fade-enter-active, .fade-leave-active { transition: opacity 0.3s; }
 .fade-enter-from, .fade-leave-to { opacity: 0; }
 .connect-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(2, 6, 23, 0.8); backdrop-filter: blur(10px); z-index: 999; display: flex; justify-content: center; align-items: center; }
-.connect-box { width: 80%; padding: 35px 25px; border-radius: 24px; text-align: center; }
+.connect-box { width: 80%; padding: 30px 20px; border-radius: 24px; text-align: center; }
 .connect-box h2 { margin: 0 0 10px; color: #fff; font-size: 22px; font-weight: 600; }
-.connect-box .hint { color: #94a3b8; font-size: 13px; margin-bottom: 30px; }
-.input-group { display: flex; align-items: center; background: rgba(0, 0, 0, 0.2); border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 16px; padding: 12px 16px; margin-bottom: 25px; }
+.connect-box .hint { color: #94a3b8; font-size: 13px; margin-bottom: 25px; }
+.input-group { display: flex; align-items: center; background: rgba(0, 0, 0, 0.2); border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 16px; padding: 12px 16px; margin-bottom: 20px; }
 .input-group .prefix { color: #38bdf8; font-weight: bold; margin-right: 10px; }
 .input-group input { flex: 1; background: transparent; border: none; color: #fff; font-size: 16px; outline: none; text-align: center; }
 .btn-primary { background: #0ea5e9; color: #fff; border: none; padding: 14px 0; font-size: 16px; font-weight: 600; border-radius: 16px; width: 100%; transition: all 0.2s; }
 .btn-primary:active { background: #0284c7; transform: scale(0.98); }
 .btn-primary:disabled { background: rgba(255,255,255,0.1); color: #64748b; }
 .error-msg { color: #ef4444; font-size: 13px; margin-top: 15px; margin-bottom: 0; }
+
+/* 🌟 新增：遮罩层高亮诊断按钮样式 */
+.btn-diagnostic-overlay {
+  background: rgba(244, 63, 94, 0.1); border: 1px solid rgba(244, 63, 94, 0.3);
+  color: #f43f5e; padding: 10px; border-radius: 12px; width: 100%;
+  margin-top: 20px; font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.2s;
+}
+.btn-diagnostic-overlay:active { background: rgba(244, 63, 94, 0.2); transform: scale(0.98); }
 </style>
