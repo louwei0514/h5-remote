@@ -167,20 +167,60 @@ const connectToServer = () => {
   isConnecting.value = true; connectError.value = '';
   if (socket) socket.disconnect();
   
-  // 🌟 改回 HTTP，完美适配原生 APK 运行环境
   const targetUrl = `http://${serverIp.value.replace('http://', '').replace('https://', '')}:3000`;
-  socket = io(targetUrl, { timeout: 3000, reconnectionAttempts: Infinity, transports: ['websocket'] });
+  console.log("【排查】🎯 开始尝试向目标通道建立连接:", targetUrl);
+
+  // 维持直接锁定 websocket 传输层的策略
+  socket = io(targetUrl, { 
+    timeout: 3500, 
+    reconnectionAttempts: Infinity,
+    transports: ['websocket']
+  });
+
+  // ====================================================
+  // 🌟 新增：Socket.io 底层引擎探针群 (专杀原生 WebView 拦截)
+  // ====================================================
+  
+  // 1. 监测底层的第一个包交互 (如果有)
+  socket.io.engine.on("initial_headers", (headers) => {
+    console.log("【排查】📦 底层正在尝试发起初始握手，Header 报文:", JSON.stringify(headers));
+  });
+
+  // 2. 监测从 HTTP 升级为 WS 时的协议熔断报错
+  socket.io.engine.on("upgradeError", (err) => {
+    console.error("【排查】❌ 协议升级层发生异常断开:", err.message || err);
+  });
+
+  // 3. 截获最关键的致命错误堆栈
+  socket.on('connect_error', (err) => {
+    console.error("【排查】🚨 链路断开，捕获到核心报错对象:", err);
+    console.error("👉 错误核心简述 (Message):", err.message);
+    console.error("👉 错误底层描述 (Description):", err.description || "无具体描述");
+    
+    // 提取极其重要的原生 Error Cause (混合内容拦截、跨域拒绝经常藏在这里)
+    if (err.cause) {
+      console.error("👉 致命元凶底层 Cause 细节:", err.cause.message || err.cause);
+    } else {
+      console.error("👉 底层未附带 Cause 原因，可能属于物理超时或 IP 无法路由。");
+    }
+
+    isConnecting.value = false; 
+    isConnected.value = false;
+    connectError.value = `链路受阻: ${err.message}`;
+  });
+
+  // ====================================================
 
   socket.on('connect', () => {
+    console.log("【排查】🚀 神经链路建立成功！已进入长连接状态！");
     isConnected.value = true; isConnecting.value = false; connectError.value = '';
     localStorage.setItem('remoteServerIp', serverIp.value);
     vibrate(30);
   });
   
-  socket.on('disconnect', () => isConnected.value = false);
-  socket.on('connect_error', () => {
-    isConnecting.value = false; isConnected.value = false;
-    connectError.value = '链路断开，请检查 IP 或服务端';
+  socket.on('disconnect', (reason) => {
+    console.warn(`【排查】🔌 链路主动/被动断开，原因代码: ${reason}`);
+    isConnected.value = false;
   });
 };
 
@@ -285,13 +325,6 @@ const LPF_ALPHA = 0.45;
 
 const toggleGyro = async () => {
   if (!gyroEnabled.value) {
-    // 尽管打包 APK 之后不需要明确授权，这行代码保留也不会影响运行
-    try {
-      if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
-        const permission = await DeviceOrientationEvent.requestPermission();
-        if (permission !== 'granted') { alert('需要陀螺仪权限才能使用空鼠'); return; }
-      }
-    } catch (e) {}
     gyroEnabled.value = true;
     gyroInitialized = false; 
     smoothedVelocityX = 0;
