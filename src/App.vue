@@ -167,54 +167,43 @@ const connectToServer = () => {
   isConnecting.value = true; connectError.value = '';
   if (socket) socket.disconnect();
   
-  const targetUrl = `http://${serverIp.value.replace('http://', '').replace('https://', '')}:3000`;
-  console.log("【排查】🎯 开始尝试向目标通道建立连接:", targetUrl);
+  // 🌟 终极修复点：
+  // 1. .trim() 干掉隐形空格
+  // 2. 强行拼成 ws:// 绕过 HTTP 劫持
+  let cleanIp = serverIp.value.replace('http://', '').replace('https://', '').trim();
+  const targetUrl = `ws://${cleanIp}:3000`;
+  
+  console.log("【排查】🎯 净化后的最终连接地址:", targetUrl);
 
-  // 维持直接锁定 websocket 传输层的策略
   socket = io(targetUrl, { 
     timeout: 3500, 
     reconnectionAttempts: Infinity,
     transports: ['websocket']
   });
 
-  // ====================================================
-  // 🌟 新增：Socket.io 底层引擎探针群 (专杀原生 WebView 拦截)
-  // ====================================================
-  
-  // 1. 监测底层的第一个包交互 (如果有)
+  // 探针保留，以便如果还连不上我们能继续排查
   socket.io.engine.on("initial_headers", (headers) => {
     console.log("【排查】📦 底层正在尝试发起初始握手，Header 报文:", JSON.stringify(headers));
   });
 
-  // 2. 监测从 HTTP 升级为 WS 时的协议熔断报错
   socket.io.engine.on("upgradeError", (err) => {
     console.error("【排查】❌ 协议升级层发生异常断开:", err.message || err);
   });
 
-  // 3. 截获最关键的致命错误堆栈
   socket.on('connect_error', (err) => {
-    console.error("【排查】🚨 链路断开，捕获到核心报错对象:", err);
-    console.error("👉 错误核心简述 (Message):", err.message);
-    console.error("👉 错误底层描述 (Description):", err.description || "无具体描述");
-    
-    // 提取极其重要的原生 Error Cause (混合内容拦截、跨域拒绝经常藏在这里)
-    if (err.cause) {
-      console.error("👉 致命元凶底层 Cause 细节:", err.cause.message || err.cause);
-    } else {
-      console.error("👉 底层未附带 Cause 原因，可能属于物理超时或 IP 无法路由。");
-    }
+    console.error("【排查】🚨 链路断开，核心报错对象:", err);
+    console.error("👉 错误核心简述:", err.message);
+    if (err.cause) console.error("👉 致命Cause原因:", err.cause.message || err.cause);
 
     isConnecting.value = false; 
     isConnected.value = false;
     connectError.value = `链路受阻: ${err.message}`;
   });
 
-  // ====================================================
-
   socket.on('connect', () => {
     console.log("【排查】🚀 神经链路建立成功！已进入长连接状态！");
     isConnected.value = true; isConnecting.value = false; connectError.value = '';
-    localStorage.setItem('remoteServerIp', serverIp.value);
+    localStorage.setItem('remoteServerIp', cleanIp); // 存入净化后的IP
     vibrate(30);
   });
   
