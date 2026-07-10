@@ -24,6 +24,7 @@
         控制中枢 <span class="disconnect-text">断开</span>
       </div>
       <div class="tool-group">
+        <div class="tool-btn diagnostic-btn" @click="runNetworkDiagnostic">诊断</div>
         <div class="tool-btn" @click="openKeyboard">输入</div>
         <div :class="['tool-btn', { active: gyroEnabled }]" @click="toggleGyro">空鼠</div>
         <div :class="['status-dot', isConnected ? 'online' : 'offline']"></div>
@@ -162,18 +163,58 @@ const saveSensitivity = () => {
   vibrate(10);
 };
 
+// ====================================================
+// 🌟 新增：全息网络底层无死角诊断探针
+// ====================================================
+const runNetworkDiagnostic = async () => {
+  vibrate(20);
+  let report = "=== 📡 全息网络底层诊断 ===\n\n";
+  let cleanIp = serverIp.value.replace('http://', '').replace('https://', '').replace('ws://', '').trim();
+  
+  if (!cleanIp) {
+    alert("请先在输入框填入小主机的 IP 地址！");
+    return;
+  }
+
+  // 探针 1：测试外网（公网）连通性
+  report += "【探针 1】尝试连接公网 (百度)...\n";
+  try {
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), 3000); // 3秒物理超时
+    // mode: 'no-cors' 允许跨域嗅探
+    await fetch('https://www.baidu.com', { mode: 'no-cors', signal: controller.signal });
+    clearTimeout(id);
+    report += "✅ 公网畅通！(APP 未被手机系统全盘断网)\n\n";
+  } catch (e) {
+    report += `❌ 公网彻底阻断！原因: ${e.name === 'AbortError' ? '连接超时' : e.message}\n\n`;
+  }
+
+  // 探针 2：测试局域网（小主机 HTTP 端口）连通性
+  report += `【探针 2】尝试连接局域网 (${cleanIp}:3000)...\n`;
+  try {
+    const controller2 = new AbortController();
+    const id2 = setTimeout(() => controller2.abort(), 3000);
+    await fetch(`http://${cleanIp}:3000`, { mode: 'no-cors', signal: controller2.signal });
+    clearTimeout(id2);
+    report += "✅ 局域网畅通！(物理链路与 Windows 端口全通)\n";
+  } catch (e) {
+    report += `❌ 局域网彻底阻断！原因: ${e.name === 'AbortError' ? '连接超时' : e.message}\n`;
+  }
+
+  alert(report);
+};
+// ====================================================
+
 const connectToServer = () => {
   if (!serverIp.value) return;
   isConnecting.value = true; connectError.value = '';
   if (socket) socket.disconnect();
   
-  // 🌟 终极修复点：
-  // 1. .trim() 干掉隐形空格
-  // 2. 强行拼成 ws:// 绕过 HTTP 劫持
+  // 强制精简化、剔除任何输入法产生的隐形空格
   let cleanIp = serverIp.value.replace('http://', '').replace('https://', '').trim();
   const targetUrl = `ws://${cleanIp}:3000`;
   
-  console.log("【排查】🎯 净化后的最终连接地址:", targetUrl);
+  console.log("【排查】🎯 纯净 WebSocket 寻址通道:", targetUrl);
 
   socket = io(targetUrl, { 
     timeout: 3500, 
@@ -181,19 +222,18 @@ const connectToServer = () => {
     transports: ['websocket']
   });
 
-  // 探针保留，以便如果还连不上我们能继续排查
   socket.io.engine.on("initial_headers", (headers) => {
-    console.log("【排查】📦 底层正在尝试发起初始握手，Header 报文:", JSON.stringify(headers));
+    console.log("【排查】📦 底层尝试发起握手:", JSON.stringify(headers));
   });
 
   socket.io.engine.on("upgradeError", (err) => {
-    console.error("【排查】❌ 协议升级层发生异常断开:", err.message || err);
+    console.error("【排查】❌ 协议升级层断开:", err.message || err);
   });
 
   socket.on('connect_error', (err) => {
-    console.error("【排查】🚨 链路断开，核心报错对象:", err);
-    console.error("👉 错误核心简述:", err.message);
-    if (err.cause) console.error("👉 致命Cause原因:", err.cause.message || err.cause);
+    console.error("【排查】🚨 链路受阻报错对象:", err);
+    console.error("👉 错误 Message:", err.message);
+    if (err.cause) console.error("👉 错误 Cause:", err.cause.message || err.cause);
 
     isConnecting.value = false; 
     isConnected.value = false;
@@ -201,14 +241,14 @@ const connectToServer = () => {
   });
 
   socket.on('connect', () => {
-    console.log("【排查】🚀 神经链路建立成功！已进入长连接状态！");
+    console.log("【排查】🚀 神经链路建立成功！");
     isConnected.value = true; isConnecting.value = false; connectError.value = '';
-    localStorage.setItem('remoteServerIp', cleanIp); // 存入净化后的IP
+    localStorage.setItem('remoteServerIp', cleanIp);
     vibrate(30);
   });
   
   socket.on('disconnect', (reason) => {
-    console.warn(`【排查】🔌 链路主动/被动断开，原因代码: ${reason}`);
+    console.warn(`【排查】🔌 链路断开，代码: ${reason}`);
     isConnected.value = false;
   });
 };
@@ -299,9 +339,7 @@ const onTouchEnd = () => {
   }
 };
 
-// ==========================================
 // 空鼠控制逻辑
-// ==========================================
 const gyroEnabled = ref(false);
 let lastBeta = null;
 let lastAlpha = null;
@@ -411,6 +449,11 @@ onUnmounted(() => {
 .tool-btn { font-size: 13px; padding: 5px 10px; border-radius: 20px; background: rgba(255,255,255,0.08); color: #cbd5e1; transition: all 0.2s; cursor: pointer; }
 .tool-btn:active { transform: scale(0.9); }
 .tool-btn.active { background: #0ea5e9; color: #fff; box-shadow: 0 0 16px rgba(14,165,233,0.4); border: 1px solid rgba(14,165,233,0.8); }
+
+/* 🌟 新增：高亮诊断按钮样式 */
+.diagnostic-btn { color: #f43f5e !important; border: 1px solid rgba(244, 63, 94, 0.3) !important; background: rgba(244, 63, 94, 0.05) !important; font-weight: 600; }
+.diagnostic-btn:active { background: rgba(244, 63, 94, 0.3) !important; transform: scale(0.9); }
+
 .status-dot { width: 8px; height: 8px; border-radius: 50%; }
 .status-dot.online { background-color: #10b981; box-shadow: 0 0 10px #10b981; }
 .status-dot.offline { background-color: #ef4444; }
