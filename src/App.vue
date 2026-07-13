@@ -104,18 +104,25 @@
         </div>
       </section>
 
-      <section v-else class="airmouse-section glass-panel">
-        <div class="airmouse-header">
+      <section 
+        v-else 
+        class="airmouse-section glass-panel giant-trigger" 
+        @touchstart.self="handleAirMouseLeftClick"
+      >
+        <div class="airmouse-header pointer-events-none">
           <div class="air-status">
-            <span class="pulse-dot"></span> 空鼠链路激活 (按实体音量键左击)
+            <span class="pulse-dot"></span> 激光指示器模式激活
           </div>
+          <p class="blind-hint">无需低头，点击此区域任意位置即为左键</p>
         </div>
-        <div class="airmouse-controls">
-          <div class="mouse-btn left-click" @touchstart="handleMouse($event, 'left')" @mousedown="handleMouse($event, 'left')">
-            <div class="btn-core">左键 (L)</div>
-          </div>
-          <div class="mouse-btn right-click" @touchstart="handleMouse($event, 'right')" @mousedown="handleMouse($event, 'right')">
-            <div class="btn-core">右键</div>
+        
+        <div class="airmouse-controls pointer-events-none">
+          <div 
+            class="mouse-btn right-click pointer-events-auto" 
+            @touchstart.stop="handleMouse($event, 'right')" 
+            @mousedown.stop="handleMouse($event, 'right')"
+          >
+            <div class="btn-core">唤出右键菜单</div>
           </div>
         </div>
       </section>
@@ -135,7 +142,6 @@ let socket = null;
 let pingTimer = null; 
 const sensitivity = ref(5); 
 
-// 🌟 统一游戏引擎循环发送机制的变量
 let animationFrameId = null;
 let pendingTouchX = 0;
 let pendingTouchY = 0;
@@ -162,27 +168,18 @@ onMounted(() => {
       isConnected.value = false;
     }
   }, 5000);
-
-  // 挂载物理按键监听 (作为左键扳机)
-  window.addEventListener('keydown', handlePhysicalKeys, { passive: false });
   
-  // 🚀 启动全局统一的网络发包循环 (Game Loop)
   animationFrameId = requestAnimationFrame(sendDataLoop);
 });
 
-// ==========================================
-// 🚀 全局统一发包循环 (彻底解决触控/空鼠网络拥堵)
-// ==========================================
 const sendDataLoop = () => {
   if (socket && isConnected.value) {
-    // 1. 如果开启了空鼠，发送空鼠滤波数据
     if (gyroEnabled.value && (Math.abs(smoothedVelocityX) > 0 || Math.abs(smoothedVelocityY) > 0)) {
       socket.emit('mousemove', { x: smoothedVelocityX, y: smoothedVelocityY });
     }
-    // 2. 如果是触控板模式，发送累加的触控位移
     else if (!gyroEnabled.value && (Math.abs(pendingTouchX) > 0 || Math.abs(pendingTouchY) > 0)) {
       socket.emit('mousemove', { x: pendingTouchX, y: pendingTouchY });
-      pendingTouchX = 0; // 发送后清空累加器
+      pendingTouchX = 0; 
       pendingTouchY = 0;
     }
   }
@@ -248,19 +245,14 @@ const handleMouse = (e, button) => {
   if (socket && isConnected.value) socket.emit(button === 'left' ? 'click' : 'rightClick');
 };
 
-// ==========================================
-// 🔫 实体扳机：音量键映射鼠标左键
-// ==========================================
-const handlePhysicalKeys = (e) => {
-  if (!gyroEnabled.value) return; 
-  const volKeys = ['AudioVolumeUp', 'AudioVolumeDown', 'VolumeUp', 'VolumeDown'];
-  if (volKeys.includes(e.key)) {
-    e.preventDefault(); 
-    const now = Date.now();
-    if (now - lastKeyTime < 50) return;
-    lastKeyTime = now;
-    vibrate(25); 
-    if (socket && isConnected.value) socket.emit('click');
+// 🌟 新增：全屏盲触左键触发逻辑
+const handleAirMouseLeftClick = (e) => {
+  const now = Date.now();
+  if (now - lastKeyTime < 100) return; // 轻微防抖
+  lastKeyTime = now;
+  vibrate([10, 20]); // 给出类似鼠标微动的两段式清脆震动反馈
+  if (socket && isConnected.value) {
+    socket.emit('click');
   }
 };
 
@@ -292,9 +284,7 @@ const processInput = (currentText) => {
   }
 };
 
-// ==========================================
-// 👆 触控板逻辑 (加入非线性加速机制)
-// ==========================================
+// 触控板逻辑
 const startX = ref(0), startY = ref(0);
 let touchStartTime = 0, isSwipe = false;
 
@@ -311,15 +301,10 @@ const onTouchMove = (e) => {
   let deltaX = currentX - startX.value;
   let deltaY = currentY - startY.value;
 
-  // 计算滑动速度 (模拟 Windows 提高指针精确度)
   const speed = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
-  
-  // 基础灵敏度
   const baseScale = sensitivity.value / 4.0;
-  // 加速度曲线：滑得越快，乘区越大 (最高 2.5倍加速)
   const accel = Math.min(1 + (speed * 0.04), 2.5); 
 
-  // 将计算好的位移存入累加器，等待 rAF 循环统一发送
   pendingTouchX += deltaX * baseScale * accel;
   pendingTouchY += deltaY * baseScale * accel;
 
@@ -335,7 +320,7 @@ const onTouchEnd = () => {
 };
 
 // ==========================================
-// 🚀 终极版空鼠逻辑 (微积分指数加速 + 动态滤波)
+// 🚀 无延迟、零迟滞的空鼠底层算法
 // ==========================================
 const gyroEnabled = ref(false);
 let lastBeta = null;
@@ -374,9 +359,10 @@ const handleOrientation = (event) => {
 
   lastBeta = event.beta; lastAlpha = event.alpha;
 
-  const deadZone = 0.02; 
-  const gyroBaseSens = 8 * (sensitivity.value / 5.0); 
-  const exponent = 1.8; 
+  // 🌟 取消重度水阻滤波，改用极小死区 + 极高 alpha 换取绝对响应速度
+  const deadZone = 0.015; // 极小的中心防抖区
+  const gyroBaseSens = 14 * (sensitivity.value / 5.0); // 整体灵敏度适当拔高
+  const exponent = 1.6; // 稍微平缓一点的非线性曲线
 
   let rawVelocityX = 0;
   let rawVelocityY = 0;
@@ -390,15 +376,14 @@ const handleOrientation = (event) => {
     rawVelocityY = -Math.sign(deltaBeta) * Math.pow((absBeta - deadZone), exponent) * gyroBaseSens;
   }
 
-  let currentSpeed = Math.sqrt(rawVelocityX * rawVelocityX + rawVelocityY * rawVelocityY);
-  let dynamicAlpha = 0.12 + (currentSpeed * 0.05); 
-  if (dynamicAlpha > 0.85) dynamicAlpha = 0.85;
+  // 🌟 核心：极其轻量的滤波！跟手感瞬间拉满，你挥得多快，屏幕就走多快！
+  const LPF_ALPHA = 0.75; 
+  smoothedVelocityX = (smoothedVelocityX * (1 - LPF_ALPHA)) + (rawVelocityX * LPF_ALPHA);
+  smoothedVelocityY = (smoothedVelocityY * (1 - LPF_ALPHA)) + (rawVelocityY * LPF_ALPHA);
 
-  smoothedVelocityX = (smoothedVelocityX * (1 - dynamicAlpha)) + (rawVelocityX * dynamicAlpha);
-  smoothedVelocityY = (smoothedVelocityY * (1 - dynamicAlpha)) + (rawVelocityY * dynamicAlpha);
-
-  if (Math.abs(smoothedVelocityX) < 0.08) smoothedVelocityX = 0;
-  if (Math.abs(smoothedVelocityY) < 0.08) smoothedVelocityY = 0;
+  // 避免低速滑行
+  if (Math.abs(smoothedVelocityX) < 0.05) smoothedVelocityX = 0;
+  if (Math.abs(smoothedVelocityY) < 0.05) smoothedVelocityY = 0;
 };
 
 watch(gyroEnabled, (val) => {
@@ -411,7 +396,6 @@ watch(gyroEnabled, (val) => {
 
 onUnmounted(() => {
   window.removeEventListener('deviceorientation', handleOrientation);
-  window.removeEventListener('keydown', handlePhysicalKeys);
   if (animationFrameId) cancelAnimationFrame(animationFrameId);
   if (pingTimer) clearInterval(pingTimer);
   if (socket) socket.disconnect();
@@ -481,23 +465,24 @@ onUnmounted(() => {
 .status-title { margin: 0 0 8px; font-size: 16px; font-weight: 600; color: #38bdf8; letter-spacing: 1px; }
 .status-sub { font-size: 11px; color: #64748b; letter-spacing: 0.5px; }
 
-.airmouse-section { flex: 1; border-radius: 20px; display: flex; flex-direction: column; padding: 16px; background: rgba(14, 165, 233, 0.05); border: 1px solid rgba(14, 165, 233, 0.2); min-height: 180px; }
-.airmouse-header { display: flex; justify-content: center; align-items: center; margin-bottom: 12px; }
-.air-status { font-size: 12px; color: #38bdf8; font-weight: 600; display: flex; align-items: center; }
-.pulse-dot { width: 8px; height: 8px; background: #0ea5e9; border-radius: 50%; margin-right: 8px; animation: pulse 1.5s infinite; }
-@keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(14, 165, 233, 0.4); } 70% { box-shadow: 0 0 0 8px rgba(14, 165, 233, 0); } 100% { box-shadow: 0 0 0 0 rgba(14, 165, 233, 0); } }
+/* 🌟 全屏巨型扳机样式 */
+.giant-trigger { flex: 1; border-radius: 20px; display: flex; flex-direction: column; padding: 16px; background: rgba(14, 165, 233, 0.05); border: 1px solid rgba(14, 165, 233, 0.2); min-height: 180px; cursor: crosshair; }
+.giant-trigger:active { background: rgba(14, 165, 233, 0.15); box-shadow: inset 0 0 30px rgba(14, 165, 233, 0.3); }
 
-.airmouse-controls { flex: 1; display: flex; gap: 12px; }
-.mouse-btn { border-radius: 16px; display: flex; justify-content: center; align-items: center; cursor: pointer; transition: all 0.1s cubic-bezier(0.4, 0, 0.2, 1); }
-.mouse-btn.left-click { flex: 2; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1); }
-.mouse-btn.right-click { flex: 1; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1); }
-.mouse-btn:active { transform: scale(0.96) translateY(2px); }
-.mouse-btn.left-click:active { background: #0ea5e9; box-shadow: 0 0 20px rgba(14, 165, 233, 0.6); border-color: #0ea5e9; }
-.mouse-btn.left-click:active .btn-core { color: #fff; }
-.mouse-btn.right-click:active { background: rgba(255, 255, 255, 0.15); border-color: #fff; }
-.mouse-btn.right-click:active .btn-core { color: #fff; }
-.mouse-btn.left-click .btn-core { font-size: 20px; font-weight: bold; color: #e2e8f0; }
-.mouse-btn.right-click .btn-core { font-size: 15px; color: #94a3b8; font-weight: 500; }
+.airmouse-header { display: flex; flex-direction: column; justify-content: center; align-items: center; margin-bottom: auto; margin-top: 10px; }
+.air-status { font-size: 14px; color: #38bdf8; font-weight: 600; display: flex; align-items: center; margin-bottom: 6px; }
+.blind-hint { font-size: 12px; color: #94a3b8; margin: 0; }
+.pulse-dot { width: 8px; height: 8px; background: #ef4444; border-radius: 50%; margin-right: 8px; animation: pulse-red 1s infinite; }
+@keyframes pulse-red { 0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.6); } 70% { box-shadow: 0 0 0 8px rgba(239, 68, 68, 0); } 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); } }
+
+.pointer-events-none { pointer-events: none; }
+.pointer-events-auto { pointer-events: auto; }
+
+.airmouse-controls { display: flex; gap: 12px; height: 50px; margin-top: auto; }
+.mouse-btn { border-radius: 12px; display: flex; justify-content: center; align-items: center; cursor: pointer; transition: all 0.1s cubic-bezier(0.4, 0, 0.2, 1); }
+.mouse-btn.right-click { flex: 1; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.2); }
+.mouse-btn.right-click:active { background: rgba(255, 255, 255, 0.2); border-color: #fff; transform: scale(0.96); }
+.mouse-btn.right-click .btn-core { font-size: 14px; color: #cbd5e1; font-weight: 500; }
 
 .fade-enter-active, .fade-leave-active { transition: opacity 0.3s; }
 .fade-enter-from, .fade-leave-to { opacity: 0; }
