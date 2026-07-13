@@ -5,7 +5,7 @@
     <transition name="fade">
       <div class="connect-overlay" v-if="!isConnected">
         <div class="glass-panel connect-box">
-          <h2>大屏终端连接</h2>
+          <h2>全息控制终端</h2>
           <p class="hint">输入主机 IP 地址建立神经链路</p>
           <div class="input-group">
             <span class="prefix">IP</span>
@@ -100,14 +100,14 @@
         <div class="touch-grid"></div>
         <div class="touch-indicator">
           <p class="status-title">全息触控区域</p>
-          <span class="status-sub">单指滑动移动光标 · 轻点执行确认</span>
+          <span class="status-sub">滑动移动光标 · 轻点确认</span>
         </div>
       </section>
 
       <section v-else class="airmouse-section glass-panel">
         <div class="airmouse-header">
           <div class="air-status">
-            <span class="pulse-dot"></span> 空鼠链路已激活，挥动手机操作
+            <span class="pulse-dot"></span> 空鼠链路激活 (按实体音量键左击)
           </div>
         </div>
         <div class="airmouse-controls">
@@ -135,6 +135,13 @@ let socket = null;
 let pingTimer = null; 
 const sensitivity = ref(5); 
 
+// 🌟 统一游戏引擎循环发送机制的变量
+let animationFrameId = null;
+let pendingTouchX = 0;
+let pendingTouchY = 0;
+let smoothedVelocityX = 0;
+let smoothedVelocityY = 0;
+
 onMounted(() => {
   const savedIp = localStorage.getItem('remoteServerIp');
   if (savedIp) {
@@ -155,7 +162,32 @@ onMounted(() => {
       isConnected.value = false;
     }
   }, 5000);
+
+  // 挂载物理按键监听 (作为左键扳机)
+  window.addEventListener('keydown', handlePhysicalKeys, { passive: false });
+  
+  // 🚀 启动全局统一的网络发包循环 (Game Loop)
+  animationFrameId = requestAnimationFrame(sendDataLoop);
 });
+
+// ==========================================
+// 🚀 全局统一发包循环 (彻底解决触控/空鼠网络拥堵)
+// ==========================================
+const sendDataLoop = () => {
+  if (socket && isConnected.value) {
+    // 1. 如果开启了空鼠，发送空鼠滤波数据
+    if (gyroEnabled.value && (Math.abs(smoothedVelocityX) > 0 || Math.abs(smoothedVelocityY) > 0)) {
+      socket.emit('mousemove', { x: smoothedVelocityX, y: smoothedVelocityY });
+    }
+    // 2. 如果是触控板模式，发送累加的触控位移
+    else if (!gyroEnabled.value && (Math.abs(pendingTouchX) > 0 || Math.abs(pendingTouchY) > 0)) {
+      socket.emit('mousemove', { x: pendingTouchX, y: pendingTouchY });
+      pendingTouchX = 0; // 发送后清空累加器
+      pendingTouchY = 0;
+    }
+  }
+  animationFrameId = requestAnimationFrame(sendDataLoop);
+};
 
 const saveSensitivity = () => {
   localStorage.setItem('remoteSensitivity', sensitivity.value);
@@ -167,7 +199,6 @@ const connectToServer = () => {
   isConnecting.value = true; connectError.value = '';
   if (socket) socket.disconnect();
   
-  // 保持修好的纯净 ws:// 协议和去除隐形空格
   let cleanIp = serverIp.value.replace('http://', '').replace('https://', '').trim();
   const targetUrl = `ws://${cleanIp}:3000`;
   
@@ -189,9 +220,7 @@ const connectToServer = () => {
     vibrate(30);
   });
   
-  socket.on('disconnect', () => {
-    isConnected.value = false;
-  });
+  socket.on('disconnect', () => { isConnected.value = false; });
 };
 
 const disconnectServer = () => {
@@ -216,8 +245,22 @@ const handleMouse = (e, button) => {
   if (now - lastKeyTime < 50) return;
   lastKeyTime = now;
   vibrate(button === 'left' ? 25 : 15);
-  if (socket && isConnected.value) {
-    socket.emit(button === 'left' ? 'click' : 'rightClick');
+  if (socket && isConnected.value) socket.emit(button === 'left' ? 'click' : 'rightClick');
+};
+
+// ==========================================
+// 🔫 实体扳机：音量键映射鼠标左键
+// ==========================================
+const handlePhysicalKeys = (e) => {
+  if (!gyroEnabled.value) return; 
+  const volKeys = ['AudioVolumeUp', 'AudioVolumeDown', 'VolumeUp', 'VolumeDown'];
+  if (volKeys.includes(e.key)) {
+    e.preventDefault(); 
+    const now = Date.now();
+    if (now - lastKeyTime < 50) return;
+    lastKeyTime = now;
+    vibrate(25); 
+    if (socket && isConnected.value) socket.emit('click');
   }
 };
 
@@ -232,12 +275,10 @@ const openKeyboard = () => {
 
 const onCompositionStart = () => { isComposing = true; };
 const onCompositionEnd = (e) => {
-  isComposing = false;
-  processInput(e.target.value);
+  isComposing = false; processInput(e.target.value);
 };
 const handleTyping = (e) => {
-  if (isComposing) return;
-  processInput(e.target.value);
+  if (isComposing) return; processInput(e.target.value);
 };
 
 const processInput = (currentText) => {
@@ -247,12 +288,13 @@ const processInput = (currentText) => {
   }
   lastText = currentText;
   if (lastText.length > 50) {
-    lastText = lastText.slice(-20);
-    inputText.value = lastText;
+    lastText = lastText.slice(-20); inputText.value = lastText;
   }
 };
 
-// 触控板逻辑
+// ==========================================
+// 👆 触控板逻辑 (加入非线性加速机制)
+// ==========================================
 const startX = ref(0), startY = ref(0);
 let touchStartTime = 0, isSwipe = false;
 
@@ -263,15 +305,26 @@ const onTouchStart = (e) => {
 
 const onTouchMove = (e) => {
   isSwipe = true; 
-  const currentX = e.touches[0].clientX, currentY = e.touches[0].clientY;
-  if (socket && isConnected.value) {
-    const scale = sensitivity.value / 5.0; 
-    socket.emit('mousemove', { 
-      x: (currentX - startX.value) * scale, 
-      y: (currentY - startY.value) * scale 
-    });
-  }
-  startX.value = currentX; startY.value = currentY;
+  const currentX = e.touches[0].clientX;
+  const currentY = e.touches[0].clientY;
+  
+  let deltaX = currentX - startX.value;
+  let deltaY = currentY - startY.value;
+
+  // 计算滑动速度 (模拟 Windows 提高指针精确度)
+  const speed = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
+  
+  // 基础灵敏度
+  const baseScale = sensitivity.value / 4.0;
+  // 加速度曲线：滑得越快，乘区越大 (最高 2.5倍加速)
+  const accel = Math.min(1 + (speed * 0.04), 2.5); 
+
+  // 将计算好的位移存入累加器，等待 rAF 循环统一发送
+  pendingTouchX += deltaX * baseScale * accel;
+  pendingTouchY += deltaY * baseScale * accel;
+
+  startX.value = currentX; 
+  startY.value = currentY;
 };
 
 const onTouchEnd = () => {
@@ -282,43 +335,21 @@ const onTouchEnd = () => {
 };
 
 // ==========================================
-// 🚀 电竞级空鼠控制逻辑 (rAF 帧同步渲染发包)
+// 🚀 终极版空鼠逻辑 (微积分指数加速 + 动态滤波)
 // ==========================================
 const gyroEnabled = ref(false);
 let lastBeta = null;
 let lastAlpha = null;
 let gyroInitialized = false;
 
-let smoothedVelocityX = 0;
-let smoothedVelocityY = 0;
-const LPF_ALPHA = 0.45; 
-let animationFrameId = null;
-
-// 独立于传感器的渲染帧同步发送循环
-const sendGyroDataLoop = () => {
-  if (gyroEnabled.value && socket && isConnected.value) {
-    if (Math.abs(smoothedVelocityX) > 0 || Math.abs(smoothedVelocityY) > 0) {
-      socket.emit('mousemove', { x: smoothedVelocityX, y: smoothedVelocityY });
-    }
-  }
-  animationFrameId = requestAnimationFrame(sendGyroDataLoop);
-};
-
 const toggleGyro = async () => {
   if (!gyroEnabled.value) {
     gyroEnabled.value = true;
     gyroInitialized = false; 
-    smoothedVelocityX = 0;
-    smoothedVelocityY = 0;
-    
-    // 启动帧同步发送
-    if (animationFrameId) cancelAnimationFrame(animationFrameId);
-    animationFrameId = requestAnimationFrame(sendGyroDataLoop);
-    
+    smoothedVelocityX = 0; smoothedVelocityY = 0;
     vibrate([15, 30, 15]);
   } else {
     gyroEnabled.value = false;
-    if (animationFrameId) cancelAnimationFrame(animationFrameId);
     vibrate([15, 30, 15]);
   }
 };
@@ -343,21 +374,31 @@ const handleOrientation = (event) => {
 
   lastBeta = event.beta; lastAlpha = event.alpha;
 
+  const deadZone = 0.02; 
+  const gyroBaseSens = 8 * (sensitivity.value / 5.0); 
+  const exponent = 1.8; 
+
   let rawVelocityX = 0;
   let rawVelocityY = 0;
-  
-  const gyroBaseSens = 18 * (sensitivity.value / 5.0); 
-  
-  if (Math.abs(deltaBeta) > 0.05 || Math.abs(deltaAlpha) > 0.05) {
-    rawVelocityX = -deltaAlpha * gyroBaseSens;
-    rawVelocityY = -deltaBeta * gyroBaseSens;
+  let absAlpha = Math.abs(deltaAlpha);
+  let absBeta = Math.abs(deltaBeta);
+
+  if (absAlpha > deadZone) {
+    rawVelocityX = -Math.sign(deltaAlpha) * Math.pow((absAlpha - deadZone), exponent) * gyroBaseSens;
+  }
+  if (absBeta > deadZone) {
+    rawVelocityY = -Math.sign(deltaBeta) * Math.pow((absBeta - deadZone), exponent) * gyroBaseSens;
   }
 
-  smoothedVelocityX = (smoothedVelocityX * (1 - LPF_ALPHA)) + (rawVelocityX * LPF_ALPHA);
-  smoothedVelocityY = (smoothedVelocityY * (1 - LPF_ALPHA)) + (rawVelocityY * LPF_ALPHA);
+  let currentSpeed = Math.sqrt(rawVelocityX * rawVelocityX + rawVelocityY * rawVelocityY);
+  let dynamicAlpha = 0.12 + (currentSpeed * 0.05); 
+  if (dynamicAlpha > 0.85) dynamicAlpha = 0.85;
 
-  if (Math.abs(smoothedVelocityX) < 0.15) smoothedVelocityX = 0;
-  if (Math.abs(smoothedVelocityY) < 0.15) smoothedVelocityY = 0;
+  smoothedVelocityX = (smoothedVelocityX * (1 - dynamicAlpha)) + (rawVelocityX * dynamicAlpha);
+  smoothedVelocityY = (smoothedVelocityY * (1 - dynamicAlpha)) + (rawVelocityY * dynamicAlpha);
+
+  if (Math.abs(smoothedVelocityX) < 0.08) smoothedVelocityX = 0;
+  if (Math.abs(smoothedVelocityY) < 0.08) smoothedVelocityY = 0;
 };
 
 watch(gyroEnabled, (val) => {
@@ -370,6 +411,7 @@ watch(gyroEnabled, (val) => {
 
 onUnmounted(() => {
   window.removeEventListener('deviceorientation', handleOrientation);
+  window.removeEventListener('keydown', handlePhysicalKeys);
   if (animationFrameId) cancelAnimationFrame(animationFrameId);
   if (pingTimer) clearInterval(pingTimer);
   if (socket) socket.disconnect();
